@@ -1,0 +1,20 @@
+xf86-video-wlshm - virtual/offscreen frame buffer driver for the Xorg X server
+
+Please submit bugs & patches to the Xorg bugzilla:
+
+        https://bugs.freedesktop.org/enter_bug.cgi?product=wayland
+
+All questions regarding this software should be directed at the
+Wayland mailing list:
+
+        http://lists.freedesktop.org/mailman/listinfo/wayland-devel
+
+The master development code repository can be found at:
+
+        git://anongit.freedesktop.org/git/xorg/driver/xf86-video-wlshm
+
+        http://cgit.freedesktop.org/xorg/driver/xf86-video-wlshm
+
+For more information on the git code manager, see:
+
+        http://wiki.x.org/wiki/GitPage
