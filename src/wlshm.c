@@ -206,22 +206,20 @@ wlshm_free_window_pixmap(WindowPtr pWindow, BOOL destroy)
     struct wlshm_pixmap *d;
     PixmapPtr pixmap;
 
-    fprintf(stderr, "1: %p\n", pWindow);
     if (!window_own_pixmap(pWindow))
 	return ;
-    fprintf(stderr, "2: %p\n", pWindow);
+
     pixmap = pScreen->GetWindowPixmap(pWindow);
     if (!pixmap)
         return ;
-    fprintf(stderr, "3: %p\n", pWindow);
+
     d = dixLookupPrivate(&pixmap->devPrivates, &wlshm_pixmap_private_key);
     if (!d)
         return ;
-    fprintf(stderr, "4: %p\n", pWindow);
+
     dixSetPrivate(&pixmap->devPrivates, &wlshm_pixmap_private_key, NULL);
-    fprintf(stderr, "5: %p\n", pWindow);
+
     if (destroy) {
-	fprintf(stderr, "destroy pixmap %p %p\n", pWindow, pixmap);
 	fbDestroyPixmap(pixmap);
 	_fbSetWindowPixmap(pWindow, NULL);
     } else {
@@ -239,7 +237,6 @@ wlshm_destroy_window(WindowPtr pWindow)
     struct wlshm_device *wlshm = wlshm_screen_priv(pScreen);
     Bool ret;
 
-    fprintf(stderr, "destroy window %p %p\n", pWindow, pWindow->parent);
     wlshm_free_window_pixmap(pWindow, TRUE);
 
     pScreen->DestroyWindow = wlshm->DestroyWindow;
@@ -257,7 +254,6 @@ wlshm_unrealize_window(WindowPtr pWindow)
     struct wlshm_device *wlshm = wlshm_screen_priv(pScreen);
     Bool ret;
 
-    fprintf(stderr, "unrealize window %p %p\n", pWindow, pWindow->parent);
     wlshm_free_window_pixmap(pWindow, TRUE);
 
     pScreen->UnrealizeWindow = wlshm->UnrealizeWindow;
@@ -291,7 +287,6 @@ wlshm_create_window(WindowPtr pWin)
     struct wlshm_device *wlshm = wlshm_screen_priv(pScreen);
     int ret;
 
-    fprintf(stderr, "create window %p %p\n", pWin, pWin->parent);
     pScreen->CreateWindow = wlshm->CreateWindow;
     ret = pScreen->CreateWindow(pWin);
     wlshm->CreateWindow = pScreen->CreateWindow;
@@ -305,7 +300,6 @@ wlshm_create_window(WindowPtr pWin)
                                       pWin->drawable.height,
                                       pWin->drawable.depth, 0);
     _fbSetWindowPixmap(pWin, pixmap);
-    fprintf(stderr, "create pixmap %p %p\n", pWin, pixmap);
     return ret;
 }
 
@@ -453,7 +447,6 @@ wlshm_create_window_buffer(struct xwl_window *xwl_window,
     int ret = BadAlloc;
     struct wlshm_pixmap *d;
 
-    fprintf(stderr, "create window buffer\n");
     d = calloc(sizeof (struct wlshm_pixmap), 1);
     if (!d) {
 	xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "can't alloc wlshm pixmap: %s\n",
