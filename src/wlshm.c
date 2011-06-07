@@ -25,8 +25,8 @@
 #include "fb.h"
 #include "picturestr.h"
 
-/* All drivers using hosted module need this */
-#include "hosted.h"
+/* All drivers using xwayland module need this */
+#include "xwayland.h"
 #include <xorg/xf86Priv.h>
 
 /*
@@ -53,6 +53,19 @@
 #define WLSHM_PATCHLEVEL PACKAGE_VERSION_PATCHLEVEL
 
 static DevPrivateKeyRec wlshm_pixmap_private_key;
+
+static Bool
+window_own_pixmap(WindowPtr pWin)
+{
+    if (xorgRootless) {
+	if (pWin->redirectDraw != RedirectDrawManual)
+            return FALSE;
+    } else {
+	if (pWin->parent)
+	    return FALSE;
+    }
+    return TRUE;
+}
 
 static Bool
 wlshm_get_device(ScrnInfoPtr pScrn)
@@ -142,8 +155,8 @@ wlshm_flush_callback(CallbackListPtr *list,
 {
     struct wlshm_device *wlshm = user_data;
 
-    if (wlshm->hosted_screen)
-        hosted_screen_post_damage(wlshm->hosted_screen);
+    if (wlshm->xwl_screen)
+        xwl_screen_post_damage(wlshm->xwl_screen);
 }
 
 static Bool
@@ -159,6 +172,8 @@ wlshm_close_screen(int scrnIndex, ScreenPtr pScreen)
 	free(wlshm->fb);
     }
 
+    xwl_screen_close(wlshm->xwl_screen);
+
     pScrn->vtSema = FALSE;
     pScreen->CloseScreen = wlshm->CloseScreen;
     return (*pScreen->CloseScreen)(scrnIndex, pScreen);
@@ -167,7 +182,14 @@ wlshm_close_screen(int scrnIndex, ScreenPtr pScreen)
 static void
 wlshm_free_screen(int scrnIndex, int flags)
 {
-    wlshm_free_device(xf86Screens[scrnIndex]);
+    ScrnInfoPtr pScrn = xf86Screens[scrnIndex];
+    struct wlshm_device *wlshm = wlshm_scrninfo_priv(pScrn);
+
+    if (wlshm->xwl_screen)
+	xwl_screen_destroy(wlshm->xwl_screen);
+    wlshm->xwl_screen = NULL;
+
+    wlshm_free_device(pScrn);
 }
 
 static ModeStatus
@@ -177,27 +199,55 @@ wlshm_valid_mode(int scrnIndex, DisplayModePtr mode, Bool verbose, int flags)
 }
 
 static void
-wlshm_free_window_pixmap(WindowPtr pWindow)
+wlshm_free_window_pixmap(WindowPtr pWindow, BOOL destroy)
 {
     ScreenPtr pScreen = pWindow->drawable.pScreen;
     struct wlshm_device *wlshm = wlshm_screen_priv(pScreen);
     struct wlshm_pixmap *d;
     PixmapPtr pixmap;
 
+    fprintf(stderr, "1: %p\n", pWindow);
+    if (!window_own_pixmap(pWindow))
+	return ;
+    fprintf(stderr, "2: %p\n", pWindow);
     pixmap = pScreen->GetWindowPixmap(pWindow);
     if (!pixmap)
         return ;
-
+    fprintf(stderr, "3: %p\n", pWindow);
     d = dixLookupPrivate(&pixmap->devPrivates, &wlshm_pixmap_private_key);
     if (!d)
         return ;
-
+    fprintf(stderr, "4: %p\n", pWindow);
     dixSetPrivate(&pixmap->devPrivates, &wlshm_pixmap_private_key, NULL);
-
-    pixmap->devPrivate.ptr = d->orig;
-    memcpy(d->orig, d->data, d->bytes);
-    munmap(d->data, d->bytes);
+    fprintf(stderr, "5: %p\n", pWindow);
+    if (destroy) {
+	fprintf(stderr, "destroy pixmap %p %p\n", pWindow, pixmap);
+	fbDestroyPixmap(pixmap);
+	_fbSetWindowPixmap(pWindow, NULL);
+    } else {
+	pixmap->devPrivate.ptr = d->orig;
+        memcpy(d->orig, d->data, d->bytes);
+        munmap(d->data, d->bytes);
+    }
     free(d);
+}
+
+static Bool
+wlshm_destroy_window(WindowPtr pWindow)
+{
+    ScreenPtr pScreen = pWindow->drawable.pScreen;
+    struct wlshm_device *wlshm = wlshm_screen_priv(pScreen);
+    Bool ret;
+
+    fprintf(stderr, "destroy window %p %p\n", pWindow, pWindow->parent);
+    wlshm_free_window_pixmap(pWindow, TRUE);
+
+    pScreen->DestroyWindow = wlshm->DestroyWindow;
+    ret = (*pScreen->DestroyWindow)(pWindow);
+    wlshm->DestroyWindow = pScreen->DestroyWindow;
+    pScreen->DestroyWindow = wlshm_destroy_window;
+
+    return ret;
 }
 
 static Bool
@@ -207,7 +257,8 @@ wlshm_unrealize_window(WindowPtr pWindow)
     struct wlshm_device *wlshm = wlshm_screen_priv(pScreen);
     Bool ret;
 
-    wlshm_free_window_pixmap(pWindow);
+    fprintf(stderr, "unrealize window %p %p\n", pWindow, pWindow->parent);
+    wlshm_free_window_pixmap(pWindow, TRUE);
 
     pScreen->UnrealizeWindow = wlshm->UnrealizeWindow;
     ret = (*pScreen->UnrealizeWindow)(pWindow);
@@ -223,14 +274,14 @@ wlshm_set_window_pixmap(WindowPtr pWindow, PixmapPtr pPixmap)
     ScreenPtr pScreen = pWindow->drawable.pScreen;
     struct wlshm_device *wlshm = wlshm_screen_priv(pScreen);
 
-    wlshm_free_window_pixmap(pWindow);
+    wlshm_free_window_pixmap(pWindow, FALSE);
 
     pScreen->SetWindowPixmap = wlshm->SetWindowPixmap;
     (*pScreen->SetWindowPixmap)(pWindow, pPixmap);
     wlshm->SetWindowPixmap = pScreen->SetWindowPixmap;
     pScreen->SetWindowPixmap = wlshm_set_window_pixmap;
 
-    /* hosted will call create_window_buffer later */
+    /* xwayland will call create_window_buffer later */
 }
 
 static Bool
@@ -240,18 +291,21 @@ wlshm_create_window(WindowPtr pWin)
     struct wlshm_device *wlshm = wlshm_screen_priv(pScreen);
     int ret;
 
-    fprintf(stderr, "create window!\n");
+    fprintf(stderr, "create window %p %p\n", pWin, pWin->parent);
     pScreen->CreateWindow = wlshm->CreateWindow;
     ret = pScreen->CreateWindow(pWin);
     wlshm->CreateWindow = pScreen->CreateWindow;
     pScreen->CreateWindow = wlshm_create_window;
+
+    if (!window_own_pixmap(pWin))
+	return ret;
 
     PixmapPtr pixmap = fbCreatePixmap(pScreen,
                                       pWin->drawable.width,
                                       pWin->drawable.height,
                                       pWin->drawable.depth, 0);
     _fbSetWindowPixmap(pWin, pixmap);
-
+    fprintf(stderr, "create pixmap %p %p\n", pWin, pixmap);
     return ret;
 }
 
@@ -362,6 +416,10 @@ wlshm_screen_init(int scrnIndex, ScreenPtr pScreen, int argc, char **argv)
     wlshm->CreateWindow = pScreen->CreateWindow;
     pScreen->CreateWindow = wlshm_create_window;
 
+    /* Wrap the current DestroyWindow function */
+    wlshm->DestroyWindow = pScreen->DestroyWindow;
+    pScreen->DestroyWindow = wlshm_destroy_window;
+
     /* Wrap the current UnrealizeWindow function */
     wlshm->UnrealizeWindow = pScreen->UnrealizeWindow;
     pScreen->UnrealizeWindow = wlshm_unrealize_window;
@@ -379,14 +437,14 @@ wlshm_screen_init(int scrnIndex, ScreenPtr pScreen, int argc, char **argv)
 
     miScreenDevPrivateInit(pScreen, pScreen->width, wlshm->fb);
 
-    if (wlshm->hosted_screen)
-        hosted_screen_init(wlshm->hosted_screen, pScreen);
+    if (wlshm->xwl_screen)
+	return (xwl_screen_init(wlshm->xwl_screen, pScreen) == Success);
 
     return TRUE;
 }
 
 static int
-wlshm_create_window_buffer(struct hosted_window *hosted_window,
+wlshm_create_window_buffer(struct xwl_window *xwl_window,
                            PixmapPtr pixmap)
 {
     ScreenPtr pScreen = pixmap->drawable.pScreen;
@@ -430,7 +488,7 @@ wlshm_create_window_buffer(struct hosted_window *hosted_window,
         goto exit;
     }
 
-    ret = hosted_create_window_buffer_shm(hosted_window, pixmap, d->fd);
+    ret = xwl_create_window_buffer_shm(xwl_window, pixmap, d->fd);
     if (ret != Success) {
         goto exit;
     }
@@ -439,7 +497,7 @@ wlshm_create_window_buffer(struct hosted_window *hosted_window,
     pixmap->devPrivate.ptr = d->data;
 
     memcpy(d->data, d->orig, d->bytes);
-    fprintf(stderr, "create window buffer %p %p %d\n", d->data, d->orig, d->bytes);
+
     dixSetPrivate(&pixmap->devPrivates, &wlshm_pixmap_private_key, d);
 
     return ret;
@@ -455,7 +513,7 @@ exit:
     return ret;
 }
 
-static struct hosted_driver hosted_driver = {
+static struct xwl_driver xwl_driver = {
     .version = 2,
     .create_window_buffer = wlshm_create_window_buffer
 };
@@ -469,15 +527,15 @@ wlshm_pre_init(ScrnInfoPtr pScrn, int flags)
 {
     struct wlshm_device *wlshm;
     int i;
-    GDevPtr device = xf86GetEntityInfo(pScrn->entityList[0])->device;
+    GDevPtr device;
     int flags24;
 
     if (flags & PROBE_DETECT)
 	return TRUE;
 
-    if (!xorgHosted) {
+    if (!xorgWayland) {
         xf86DrvMsg(pScrn->scrnIndex, X_ERROR,
-                   "You must run Xorg with -hosted parameter\n");
+                   "You must run Xorg with -xwayland parameter\n");
         return FALSE;
     }
 
@@ -539,7 +597,9 @@ wlshm_pre_init(ScrnInfoPtr pScrn, int flags)
 	    return FALSE;
     }
 
+    device = xf86GetEntityInfo(pScrn->entityList[0])->device;
     xf86CollectOptions(pScrn, device->options);
+    free(device);
 
     /* Process the options */
     if (!(wlshm->options = malloc(sizeof(wlshm_options))))
@@ -549,13 +609,13 @@ wlshm_pre_init(ScrnInfoPtr pScrn, int flags)
 
     xf86ProcessOptions(pScrn->scrnIndex, pScrn->options, wlshm->options);
 
-    if (xf86LoadSubModule(pScrn, "hosted") == NULL) {
+    if (xf86LoadSubModule(pScrn, "xwayland") == NULL) {
 	goto error;
     }
 
-    wlshm->hosted_screen = hosted_screen_pre_init(pScrn, 0, &hosted_driver);
-    if (!wlshm->hosted_screen) {
-        xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "Failed to initialize hosted.\n");
+    wlshm->xwl_screen = xwl_screen_pre_init(pScrn, 0, &xwl_driver);
+    if (!wlshm->xwl_screen) {
+        xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "Failed to initialize xwayland.\n");
         goto error;
     }
 
@@ -651,6 +711,8 @@ wlshm_probe(DriverPtr drv, int flags)
 
         found = TRUE;
     }
+
+    free(sections);
 
     return found;
 }

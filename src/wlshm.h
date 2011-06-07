@@ -27,12 +27,13 @@ struct wlshm_device
     /* proc pointer */
     CloseScreenProcPtr CloseScreen;
     CreateWindowProcPtr	CreateWindow;
+    DestroyWindowProcPtr DestroyWindow;
     UnrealizeWindowProcPtr UnrealizeWindow;
     SetWindowPixmapProcPtr SetWindowPixmap;
 
     pointer* fb;
 
-    struct hosted_screen *hosted_screen;
+    struct xwl_screen *xwl_screen;
 };
 
 struct wlshm_pixmap {
