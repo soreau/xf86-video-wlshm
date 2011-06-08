@@ -199,15 +199,12 @@ wlshm_valid_mode(int scrnIndex, DisplayModePtr mode, Bool verbose, int flags)
 }
 
 static void
-wlshm_free_window_pixmap(WindowPtr pWindow, BOOL destroy)
+wlshm_free_window_pixmap(WindowPtr pWindow)
 {
     ScreenPtr pScreen = pWindow->drawable.pScreen;
     struct wlshm_device *wlshm = wlshm_screen_priv(pScreen);
     struct wlshm_pixmap *d;
     PixmapPtr pixmap;
-
-    if (!window_own_pixmap(pWindow))
-	return ;
 
     pixmap = pScreen->GetWindowPixmap(pWindow);
     if (!pixmap)
@@ -219,14 +216,10 @@ wlshm_free_window_pixmap(WindowPtr pWindow, BOOL destroy)
 
     dixSetPrivate(&pixmap->devPrivates, &wlshm_pixmap_private_key, NULL);
 
-    if (destroy) {
-	fbDestroyPixmap(pixmap);
-	_fbSetWindowPixmap(pWindow, NULL);
-    } else {
-	pixmap->devPrivate.ptr = d->orig;
-        memcpy(d->orig, d->data, d->bytes);
-        munmap(d->data, d->bytes);
-    }
+    pixmap->devPrivate.ptr = d->orig;
+    memcpy(d->orig, d->data, d->bytes);
+    munmap(d->data, d->bytes);
+
     free(d);
 }
 
@@ -237,7 +230,7 @@ wlshm_destroy_window(WindowPtr pWindow)
     struct wlshm_device *wlshm = wlshm_screen_priv(pScreen);
     Bool ret;
 
-    wlshm_free_window_pixmap(pWindow, TRUE);
+    wlshm_free_window_pixmap(pWindow);
 
     pScreen->DestroyWindow = wlshm->DestroyWindow;
     ret = (*pScreen->DestroyWindow)(pWindow);
@@ -254,7 +247,7 @@ wlshm_unrealize_window(WindowPtr pWindow)
     struct wlshm_device *wlshm = wlshm_screen_priv(pScreen);
     Bool ret;
 
-    wlshm_free_window_pixmap(pWindow, TRUE);
+    wlshm_free_window_pixmap(pWindow);
 
     pScreen->UnrealizeWindow = wlshm->UnrealizeWindow;
     ret = (*pScreen->UnrealizeWindow)(pWindow);
@@ -270,7 +263,7 @@ wlshm_set_window_pixmap(WindowPtr pWindow, PixmapPtr pPixmap)
     ScreenPtr pScreen = pWindow->drawable.pScreen;
     struct wlshm_device *wlshm = wlshm_screen_priv(pScreen);
 
-    wlshm_free_window_pixmap(pWindow, FALSE);
+    wlshm_free_window_pixmap(pWindow);
 
     pScreen->SetWindowPixmap = wlshm->SetWindowPixmap;
     (*pScreen->SetWindowPixmap)(pWindow, pPixmap);
