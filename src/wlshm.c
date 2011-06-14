@@ -185,9 +185,11 @@ wlshm_free_screen(int scrnIndex, int flags)
     ScrnInfoPtr pScrn = xf86Screens[scrnIndex];
     struct wlshm_device *wlshm = wlshm_scrninfo_priv(pScrn);
 
-    if (wlshm->xwl_screen)
-	xwl_screen_destroy(wlshm->xwl_screen);
-    wlshm->xwl_screen = NULL;
+    if (wlshm) {
+        if (wlshm->xwl_screen)
+	    xwl_screen_destroy(wlshm->xwl_screen);
+	wlshm->xwl_screen = NULL;
+    }
 
     wlshm_free_device(pScrn);
 }
@@ -195,7 +197,7 @@ wlshm_free_screen(int scrnIndex, int flags)
 static ModeStatus
 wlshm_valid_mode(int scrnIndex, DisplayModePtr mode, Bool verbose, int flags)
 {
-    return(MODE_OK);
+    return MODE_OK;
 }
 
 static void
