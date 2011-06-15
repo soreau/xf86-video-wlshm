@@ -208,6 +208,9 @@ wlshm_free_window_pixmap(WindowPtr pWindow)
     struct wlshm_pixmap *d;
     PixmapPtr pixmap;
 
+    if (!xorgRootless && pWindow->parent)
+	return ;
+
     pixmap = pScreen->GetWindowPixmap(pWindow);
     if (!pixmap)
         return ;
@@ -219,6 +222,7 @@ wlshm_free_window_pixmap(WindowPtr pWindow)
     dixSetPrivate(&pixmap->devPrivates, &wlshm_pixmap_private_key, NULL);
 
     pixmap->devPrivate.ptr = d->orig;
+    pixmap->devPrivate.fptr = d->orig;
     memcpy(d->orig, d->data, d->bytes);
     munmap(d->data, d->bytes);
 
@@ -287,7 +291,7 @@ wlshm_create_window(WindowPtr pWin)
     wlshm->CreateWindow = pScreen->CreateWindow;
     pScreen->CreateWindow = wlshm_create_window;
 
-    if (!window_own_pixmap(pWin))
+    if (!xorgRootless || !window_own_pixmap(pWin))
 	return ret;
 
     PixmapPtr pixmap = fbCreatePixmap(pScreen,
@@ -483,7 +487,7 @@ wlshm_create_window_buffer(struct xwl_window *xwl_window,
 
     d->orig = pixmap->devPrivate.ptr;
     pixmap->devPrivate.ptr = d->data;
-
+    pixmap->devPrivate.fptr = d->data;
     memcpy(d->data, d->orig, d->bytes);
 
     dixSetPrivate(&pixmap->devPrivates, &wlshm_pixmap_private_key, d);
